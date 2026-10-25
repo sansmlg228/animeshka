@@ -2,7 +2,7 @@
 //  КОНСТАНТЫ
 // ============================================================
 const ANILIST_API = 'https://graphql.anilist.co';
-const SHIKIMORI_BASE = 'https://shikimori.one/api';
+const MY_WORKER_URL = 'https://anime-proxy.sansmlg228.workers.dev'; // Ваш Cloudflare Worker
 const STORAGE_KEY = 'animeLibraryV2';
 
 const genreColors = {
@@ -127,21 +127,19 @@ function saveLibrary() {
 }
 
 // ============================================================
-//  SHIKIMORI API (Для поиска на русском)
+//  SHIKIMORI API (Через ваш Cloudflare Worker)
 // ============================================================
 async function searchRussianTitle(query) {
     try {
         // Берем первые 5 слов, чтобы поиск не ломался на слишком длинных названиях
         const searchStr = query.split(' ').slice(0, 5).join(' ');
         
-        const targetUrl = `https://shikimori.one/api/animes?search=${encodeURIComponent(searchStr)}&limit=1`;
-        
-        // Используем AllOrigins — он лучше обходит блокировки
-        const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`;
+        // Обращаемся к нашему воркеру, который проксирует запрос и добавляет User-Agent
+        const proxyUrl = `${MY_WORKER_URL}/proxy/api/animes?search=${encodeURIComponent(searchStr)}&limit=1`;
         
         const res = await fetch(proxyUrl);
         if (!res.ok) {
-            console.warn(`Shikimori вернул ошибку: ${res.status}`);
+            console.warn(`Воркер вернул ошибку: ${res.status}`);
             return null;
         }
 
@@ -156,7 +154,7 @@ async function searchRussianTitle(query) {
             score: list[0].score
         };
     } catch (e) {
-        console.warn('Shikimori поиск не удался:', e);
+        console.warn('Поиск на русском не удался:', e);
         return null;
     }
 }
@@ -327,7 +325,7 @@ async function handleSearch() {
     let ruData = null;
 
     try {
-        // Если есть кириллица, ищем в Shikimori
+        // Если есть кириллица, ищем в Shikimori через наш Воркер
         if (/[а-яА-ЯёЁ]/.test(query)) {
             statusMessage.textContent = 'Поиск на русском (Shikimori)...';
             ruData = await searchRussianTitle(query);
