@@ -4,40 +4,45 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>🎌 Аниме Библиотека</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <header>
-        <h1>🎌 Аниме Библиотека</h1>
+    <header class="top-bar">
+        <div class="header-content">
+            <h1>Аниме Библиотека</h1>
 
-        <div class="search-box">
-            <input type="text" id="search-input" placeholder="Название на русском, английском или ромадзи..." autocomplete="off">
-            <button id="search-btn">Найти</button>
-        </div>
-
-        <div class="toolbar">
-            <input type="text" id="library-search" placeholder="🔍 Поиск по библиотеке..." autocomplete="off">
-
-            <select id="genre-filter">
-                <option value="all">Все жанры</option>
-            </select>
-
-            <select id="sort-select">
-                <option value="title-asc">Название А→Я</option>
-                <option value="title-desc">Название Я→А</option>
-                <option value="status">По статусу</option>
-                <option value="added-desc">Сначала новые</option>
-                <option value="added-asc">Сначала старые</option>
-            </select>
-
-            <div class="io-buttons">
-                <button id="export-btn" class="ghost" title="Скачать библиотеку в JSON">⬇ Экспорт</button>
-                <label for="import-input" class="ghost" title="Загрузить библиотеку из JSON">⬆ Импорт</label>
-                <input type="file" id="import-input" accept=".json" hidden>
+            <div class="search-container">
+                <input type="text" id="search-input" placeholder="Название на русском, английском или ромадзи..." autocomplete="off">
+                <button id="search-btn">Найти</button>
             </div>
-        </div>
 
-        <div id="stats" class="stats"></div>
+            <div class="toolbar">
+                <input type="text" id="library-search" placeholder="🔍 Поиск по библиотеке..." autocomplete="off">
+
+                <select id="genre-filter">
+                    <option value="all">Все жанры</option>
+                </select>
+
+                <select id="sort-select">
+                    <option value="title-asc">Название А→Я</option>
+                    <option value="title-desc">Название Я→А</option>
+                    <option value="status">По статусу</option>
+                    <option value="added-desc">Сначала новые</option>
+                    <option value="added-asc">Сначала старые</option>
+                </select>
+
+                <div class="io-buttons">
+                    <button id="export-btn" class="ghost" title="Скачать библиотеку в JSON">⬇ Экспорт</button>
+                    <label for="import-input" class="ghost" title="Загрузить библиотеку из JSON">⬆ Импорт</label>
+                    <input type="file" id="import-input" accept=".json" hidden>
+                </div>
+            </div>
+
+            <div id="stats" class="stats"></div>
+        </div>
     </header>
 
     <main>
