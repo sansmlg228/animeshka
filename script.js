@@ -134,11 +134,16 @@ async function searchRussianTitle(query) {
         // Берем первые 5 слов, чтобы поиск не ломался на слишком длинных названиях
         const searchStr = query.split(' ').slice(0, 5).join(' ');
         
-        const targetUrl = `${SHIKIMORI_BASE}/animes?search=${encodeURIComponent(searchStr)}&limit=1`;
-        const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`;
+        const targetUrl = `https://shikimori.one/api/animes?search=${encodeURIComponent(searchStr)}&limit=1`;
+        
+        // Используем AllOrigins — он лучше обходит блокировки
+        const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`;
         
         const res = await fetch(proxyUrl);
-        if (!res.ok) return null;
+        if (!res.ok) {
+            console.warn(`Shikimori вернул ошибку: ${res.status}`);
+            return null;
+        }
 
         const list = await res.json();
         if (!Array.isArray(list) || list.length === 0) return null;
