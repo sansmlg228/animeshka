@@ -134,7 +134,7 @@ async function searchRussianTitle(query) {
         // Берем первые 5 слов, чтобы поиск не ломался на слишком длинных названиях
         const searchStr = query.split(' ').slice(0, 5).join(' ');
         
-        // Обращаемся к нашему воркеру, который проксирует запрос и добавляет User-Agent
+        // Обращаемся к нашему воркеру
         const proxyUrl = `${MY_WORKER_URL}/proxy/api/animes?search=${encodeURIComponent(searchStr)}&limit=1`;
         
         const res = await fetch(proxyUrl);
