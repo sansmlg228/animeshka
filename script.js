@@ -131,8 +131,10 @@ function saveLibrary() {
 // ============================================================
 async function searchRussianTitle(query) {
     try {
-        const targetUrl = `${SHIKIMORI_BASE}/animes?search=${encodeURIComponent(query)}&limit=1`;
-        // Используем прокси для обхода CORS
+        // Берем первые 5 слов, чтобы поиск не ломался на слишком длинных названиях
+        const searchStr = query.split(' ').slice(0, 5).join(' ');
+        
+        const targetUrl = `${SHIKIMORI_BASE}/animes?search=${encodeURIComponent(searchStr)}&limit=1`;
         const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`;
         
         const res = await fetch(proxyUrl);
@@ -141,9 +143,11 @@ async function searchRussianTitle(query) {
         const list = await res.json();
         if (!Array.isArray(list) || list.length === 0) return null;
 
-        // Возвращаем романдзи-название и оценку (если есть)
+        // Возвращаем ID (это MAL ID), названия и оценку
         return {
+            malId: list[0].id,
             romajiTitle: list[0].name,
+            russianTitle: list[0].russian,
             score: list[0].score
         };
     } catch (e) {
@@ -167,12 +171,14 @@ async function anilistQuery(query, variables = {}) {
     return json.data;
 }
 
+// Поиск по тексту (Английский / Romaji)
 async function fetchAnime(query) {
     const searchQuery = `
         query ($search: String) {
             Page (perPage: 8) {
                 media (search: $search, type: ANIME, isAdult: false) {
                     id
+                    idMal
                     title { romaji english native }
                     coverImage { large }
                     genres
@@ -187,10 +193,41 @@ async function fetchAnime(query) {
         }
     `;
     const data = await anilistQuery(searchQuery, { search: query });
-    const mediaList = data.Page.media || [];
+    return formatMediaList(data.Page.media);
+}
 
-    return mediaList.map(item => ({
+// Точный поиск по MAL ID (100% совпадение)
+async function fetchAnimeByMALId(malId) {
+    const searchQuery = `
+        query ($idMal: Int) {
+            Media (idMal: $idMal, type: ANIME) {
+                id
+                idMal
+                title { romaji english native }
+                coverImage { large }
+                genres
+                status
+                episodes
+                seasonYear
+                season
+                averageScore
+                format
+            }
+        }
+    `;
+    try {
+        const data = await anilistQuery(searchQuery, { idMal: malId });
+        if (!data.Media) return [];
+        return formatMediaList([data.Media]);
+    } catch(e) {
+        return [];
+    }
+}
+
+function formatMediaList(mediaList) {
+    return (mediaList || []).map(item => ({
         id: item.id,
+        malId: item.idMal,
         title: item.title.romaji || item.title.english || item.title.native,
         titles: [
             { type: 'Romaji', title: item.title.romaji },
@@ -246,6 +283,7 @@ async function fetchFullDetails(animeId) {
         query ($id: Int) {
             Media (id: $id) {
                 id
+                idMal
                 title { romaji english native }
                 coverImage { large }
                 genres
@@ -260,25 +298,8 @@ async function fetchFullDetails(animeId) {
     `;
     try {
         const data = await anilistQuery(detailsQuery, { id: animeId });
-        const item = data.Media;
-        return {
-            id: item.id,
-            title: item.title.romaji || item.title.english || item.title.native,
-            titles: [
-                { type: 'Romaji', title: item.title.romaji },
-                { type: 'English', title: item.title.english },
-                { type: 'Native', title: item.title.native }
-            ].filter(t => t.title),
-            image: item.coverImage?.large || '',
-            genres: (item.genres || []).map(g => ({ name: g })),
-            themes: [],
-            status: item.status,
-            episodes: item.episodes,
-            year: item.seasonYear,
-            season: item.season,
-            score: item.averageScore ? (item.averageScore / 10).toFixed(1) : null,
-            type: item.format
-        };
+        const formatted = formatMediaList([data.Media]);
+        return formatted.length > 0 ? formatted[0] : null;
     } catch (e) {
         console.warn('Не удалось загрузить детали:', e);
         return null;
@@ -286,7 +307,7 @@ async function fetchFullDetails(animeId) {
 }
 
 // ============================================================
-//  ПОИСК
+//  ПОИСК (ГЛАВНАЯ ЛОГИКА)
 // ============================================================
 async function handleSearch() {
     let query = searchInput.value.trim();
@@ -298,29 +319,41 @@ async function handleSearch() {
     searchBtn.innerHTML = '<span class="spinner"></span>Поиск...';
     statusMessage.textContent = '';
 
-    let shikimoriScore = null;
+    let ruData = null;
 
     try {
-        // Проверяем, есть ли в запросе русские буквы
-        const cyrillicPattern = /[а-яА-ЯёЁ]/;
-        if (cyrillicPattern.test(query)) {
+        // Если есть кириллица, ищем в Shikimori
+        if (/[а-яА-ЯёЁ]/.test(query)) {
             statusMessage.textContent = 'Поиск на русском (Shikimori)...';
-            const ruResult = await searchRussianTitle(query);
-            if (!ruResult) {
-                statusMessage.textContent = 'Не удалось найти аниме по русскому названию.';
+            ruData = await searchRussianTitle(query);
+            
+            if (!ruData) {
+                statusMessage.textContent = 'Не удалось найти аниме по русскому названию. Попробуйте написать на английском.';
                 return;
             }
-            query = ruResult.romajiTitle;
-            shikimoriScore = ruResult.score ? parseFloat(ruResult.score) : null;
-            statusMessage.textContent = 'Данные найдены, загружаем из AniList...';
+            // Перезаписываем query на Romaji на случай, если AniList не найдет по ID
+            query = ruData.romajiTitle; 
         }
 
-        const results = await fetchAnime(query);
+        let results = [];
+
+        // Если у нас есть MAL ID, ищем СТРОГО по нему (100% точность)
+        if (ruData && ruData.malId) {
+            statusMessage.textContent = 'Загрузка данных из AniList по ID...';
+            results = await fetchAnimeByMALId(ruData.malId);
+        }
+
+        // Если по ID не нашли (например, аниме нет в AniList), делаем обычный поиск
+        if (results.length === 0) {
+            results = await fetchAnime(query);
+        }
+
         if (results.length === 0) {
             statusMessage.textContent = 'Ничего не найдено. Попробуйте другое название.';
             return;
         }
 
+        // Выбор версии, если их несколько
         const chosen = await showVersionPicker(results, 'Найдено несколько вариантов. Выберите нужный:');
         if (!chosen) return;
 
@@ -351,15 +384,16 @@ async function handleSearch() {
             return;
         }
 
-        // Добавляем рейтинг Shikimori, если он был найден при поиске на русском
-        if (shikimoriScore) {
-            finalAnime.shikimoriScore = shikimoriScore;
+        // Прикрепляем русское название и рейтинг Shikimori, если они есть
+        if (ruData) {
+            finalAnime.russianTitle = ruData.russianTitle;
+            if (ruData.score) finalAnime.shikimoriScore = parseFloat(ruData.score);
         }
 
         library.push(finalAnime);
         saveLibrary();
         searchInput.value = '';
-        statusMessage.textContent = `Добавлено: «${finalAnime.title}». Всего: ${library.length}.`;
+        statusMessage.textContent = `Добавлено: «${finalAnime.russianTitle || finalAnime.title}». Всего: ${library.length}.`;
 
         rebuildFilterOptions();
         render();
@@ -411,7 +445,7 @@ function closeVersionPicker(result) {
 versionCancel.addEventListener('click', () => closeVersionPicker(null));
 
 // ============================================================
-//  УДАЛЕНИЕ
+//  УДАЛЕНИЕ И ОЦЕНКИ
 // ============================================================
 function removeAnime(id) {
     library = library.filter(a => a.id !== id);
@@ -420,9 +454,6 @@ function removeAnime(id) {
     render();
 }
 
-// ============================================================
-//  ОТМЕТКИ ПРОСМОТРЕННОГО
-// ============================================================
 function toggleWatched(animeId, relationId) {
     const anime = library.find(a => a.id === animeId);
     if (!anime) return;
@@ -433,9 +464,6 @@ function toggleWatched(animeId, relationId) {
     saveLibrary();
 }
 
-// ============================================================
-//  ЛИЧНАЯ ОЦЕНКА
-// ============================================================
 function setPersonalScore(animeId, value) {
     const anime = library.find(a => a.id === animeId);
     if (!anime) return;
@@ -472,7 +500,9 @@ async function importLibrary(file) {
             if (library.some(a => a.id === item.id)) { skipped++; continue; }
             library.push({
                 id: item.id,
+                malId: item.malId || null,
                 title: item.title,
+                russianTitle: item.russianTitle || null,
                 titles: item.titles || [],
                 image: item.image || '',
                 genres: item.genres || [],
@@ -501,7 +531,7 @@ async function importLibrary(file) {
 }
 
 // ============================================================
-//  ФИЛЬТР
+//  ФИЛЬТР И РЕНДЕР
 // ============================================================
 function rebuildFilterOptions() {
     const current = genreFilter.value;
@@ -526,9 +556,6 @@ function rebuildFilterOptions() {
     }
 }
 
-// ============================================================
-//  ФИЛЬТРАЦИЯ + СОРТИРОВКА
-// ============================================================
 function getVisibleItems() {
     let items = library.slice();
 
@@ -543,13 +570,14 @@ function getVisibleItems() {
         const q = librarySearch.trim().toLowerCase();
         items = items.filter(a =>
             a.title.toLowerCase().includes(q) ||
+            (a.russianTitle && a.russianTitle.toLowerCase().includes(q)) ||
             (a.titles || []).some(t => t.title.toLowerCase().includes(q))
         );
     }
 
     switch (activeSort) {
-        case 'title-asc': items.sort((a, b) => a.title.localeCompare(b.title, 'ru')); break;
-        case 'title-desc': items.sort((a, b) => b.title.localeCompare(a.title, 'ru')); break;
+        case 'title-asc': items.sort((a, b) => (a.russianTitle || a.title).localeCompare(b.russianTitle || b.title, 'ru')); break;
+        case 'title-desc': items.sort((a, b) => (b.russianTitle || b.title).localeCompare(a.russianTitle || a.title, 'ru')); break;
         case 'status': items.sort((a, b) => translateStatus(a.status).localeCompare(translateStatus(b.status), 'ru')); break;
         case 'added-desc': items.sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0)); break;
         case 'added-asc': items.sort((a, b) => (a.addedAt || 0) - (b.addedAt || 0)); break;
@@ -558,9 +586,6 @@ function getVisibleItems() {
     return items;
 }
 
-// ============================================================
-//  РЕНДЕР
-// ============================================================
 function renderStats() {
     const total = library.length;
     const finished = library.filter(a => a.status === 'FINISHED').length;
@@ -609,7 +634,6 @@ function createCard(anime) {
     const yearLabel = anime.year ? `${anime.year}${anime.season ? ' · ' + anime.season : ''}` : '';
     const episodesLabel = anime.episodes ? `${anime.episodes} эп.` : '';
     
-    // Вывод оценок
     const malScore = anime.score ? `AniList: <strong>${anime.score}</strong>` : '';
     const shikiScore = anime.shikimoriScore ? `Shikimori: <strong>${anime.shikimoriScore}</strong>` : '';
 
@@ -619,13 +643,18 @@ function createCard(anime) {
         return `<option value="${v}" ${sel}>${v}</option>`;
     }).join('');
 
+    // Главное отличие: если есть русское название, выводим его большим шрифтом!
+    const displayTitle = anime.russianTitle || anime.title;
+    const subTitle = anime.russianTitle ? anime.title : '';
+
     card.innerHTML = `
         <div class="poster-wrap">
-            <img src="${escapeHtml(anime.image)}" alt="${escapeHtml(anime.title)}" loading="lazy"
+            <img src="${escapeHtml(anime.image)}" alt="${escapeHtml(displayTitle)}" loading="lazy"
                  onerror="this.style.opacity='0';this.parentElement.style.background='#333'">
         </div>
         <div class="card-body">
-            <h3 class="anime-title">${escapeHtml(anime.title)}</h3>
+            <h3 class="anime-title">${escapeHtml(displayTitle)}</h3>
+            ${subTitle ? `<div style="font-size:0.75rem;color:var(--muted);margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(subTitle)}</div>` : ''}
         </div>
         <div class="details">
             <p class="status">${yearLabel ? yearLabel + ' · ' : ''}${episodesLabel}</p>
@@ -656,7 +685,7 @@ function createCard(anime) {
 
     card.querySelector('.remove-btn').addEventListener('click', (e) => {
         e.stopPropagation();
-        if (confirm(`Удалить «${anime.title}» из библиотеки?`)) removeAnime(anime.id);
+        if (confirm(`Удалить «${displayTitle}» из библиотеки?`)) removeAnime(anime.id);
     });
 
     card.querySelector('.personal-score').addEventListener('change', (e) => {
