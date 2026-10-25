@@ -1,9 +1,8 @@
 // ============================================================
 //  КОНСТАНТЫ
 // ============================================================
-const JIKAN_BASE     = 'https://api.jikan.moe/v4';
-const SHIKIMORI_BASE = 'https://shikimori.one/api';
-const STORAGE_KEY    = 'animeLibraryV2';
+const ANILIST_API = 'https://graphql.anilist.co';
+const STORAGE_KEY = 'animeLibraryV2';
 
 const genreColors = {
     'Action':'#FF4500','Adventure':'#FF8C00','Comedy':'#FFD700','Drama':'#8A2BE2',
@@ -64,11 +63,11 @@ const relationTranslations = {
 // ============================================================
 //  СОСТОЯНИЕ
 // ============================================================
-let library       = [];
-let activeGenre   = 'all';
-let activeSort    = 'title-asc';
+let library = [];
+let activeGenre = 'all';
+let activeSort = 'title-asc';
 let librarySearch = '';
-let isSearching   = false;
+let isSearching = false;
 let pendingVersionResolve = null;
 
 // ============================================================
@@ -129,74 +128,88 @@ function saveLibrary() {
 }
 
 // ============================================================
-//  JIKAN API (через CORS-прокси)
+//  ANILIST API
 // ============================================================
-async function jikanFetch(path, retries = 3, delay = 1000) {
-    // Используем публичный прокси, чтобы обойти блокировку и CORS
-    const proxy = 'https://corsproxy.io/?';
-    const targetUrl = `https://api.jikan.moe/v4${path}`;
-    const url = proxy + encodeURIComponent(targetUrl);
-
-    for (let i = 0; i < retries; i++) {
-        try {
-            const res = await fetch(url);
-            if (!res.ok) {
-                // Если ошибка сервера (5xx) или прокси (429), пробуем еще раз
-                if (res.status >= 500 || res.status === 429) {
-                    throw new Error(`Прокси вернул ошибку: ${res.status}`);
-                }
-                // Если ошибка клиента (4xx), повторять нет смысла
-                if (res.status >= 400 && res.status < 500) {
-                    throw new Error(`Ошибка запроса: ${res.status}`);
-                }
-            }
-            return res.json();
-        } catch (e) {
-            console.warn(`Попытка ${i + 1} из ${retries} не удалась:`, e.message);
-            if (i < retries - 1) {
-                // Ждем перед следующей попыткой (экспоненциальная задержка)
-                await new Promise(r => setTimeout(r, delay * (i + 1)));
-            } else {
-                // Если все попытки исчерпаны, выбрасываем ошибку
-                throw e;
-            }
-        }
-    }
+async function anilistQuery(query, variables = {}) {
+    const res = await fetch(ANILIST_API, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        body: JSON.stringify({ query, variables })
+    });
+    if (!res.ok) throw new Error(`AniList API: ${res.status}`);
+    const json = await res.json();
+    if (json.errors) throw new Error(json.errors[0].message);
+    return json.data;
 }
 
 async function fetchAnime(query) {
-    const url = `${JIKAN_BASE}/anime?q=${encodeURIComponent(query)}&limit=8&sfw`;
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`Jikan API: ${res.status}`);
-    const json = await res.json();
+    const searchQuery = `
+        query ($search: String) {
+            Page (perPage: 8) {
+                media (search: $search, type: ANIME, isAdult: false) {
+                    id
+                    title { romaji english native }
+                    coverImage { large }
+                    genres
+                    status
+                    episodes
+                    seasonYear
+                    season
+                    averageScore
+                    format
+                }
+            }
+        }
+    `;
+    const data = await anilistQuery(searchQuery, { search: query });
+    const mediaList = data.Page.media || [];
 
-    return (json.data || []).map(item => ({
-        id:       item.mal_id,
-        title:    item.title,
-        titles:   item.titles || [],
-        image:    item.images?.jpg?.image_url || item.images?.webp?.image_url || '',
-        genres:   item.genres || [],
-        themes:   item.themes || [],
-        status:   item.status || '',
-        episodes: item.episodes || null,
-        year:     item.year || null,
-        season:   item.season || null,
-        score:    item.score || null,
-        type:     item.type || null,
-        addedAt:  Date.now()
+    return mediaList.map(item => ({
+        id:          item.id,
+        title:       item.title.romaji || item.title.english || item.title.native,
+        titles:      [
+            { type: 'Romaji', title: item.title.romaji },
+            { type: 'English', title: item.title.english },
+            { type: 'Native', title: item.title.native }
+        ].filter(t => t.title),
+        image:       item.coverImage?.large || '',
+        genres:      (item.genres || []).map(g => ({ name: g })),
+        themes:      [], // AniList не разделяет темы так же, как Jikan, но можно добавить позже
+        status:      item.status,
+        episodes:    item.episodes,
+        year:        item.seasonYear,
+        season:      item.season,
+        score:       item.averageScore ? (item.averageScore / 10).toFixed(1) : null,
+        type:        item.format,
+        addedAt:     Date.now()
     }));
 }
 
 async function fetchRelations(animeId) {
+    const relationsQuery = `
+        query ($id: Int) {
+            Media (id: $id) {
+                relations {
+                    edges {
+                        relationType
+                        node {
+                            id
+                            title { romaji english native }
+                            format
+                        }
+                    }
+                }
+            }
+        }
+    `;
     try {
-        const json = await jikanFetch(`/anime/${animeId}/relations`);
-        return (json.data || []).flatMap(rel =>
-            (rel.entry || []).map(entry => ({
-                id:       entry.mal_id,
-                title:    entry.name,
-                relation: rel.relation || 'Related'
-            }))
-        );
+        const data = await anilistQuery(relationsQuery, { id: animeId });
+        const edges = data.Media.relations.edges || [];
+        return edges.map(edge => ({
+            id:       edge.node.id,
+            title:    edge.node.title.romaji || edge.node.title.english || edge.node.title.native,
+            relation: edge.relationType
+        }));
     } catch (e) {
         console.warn('Не удалось загрузить связи:', e);
         return [];
@@ -204,9 +217,43 @@ async function fetchRelations(animeId) {
 }
 
 async function fetchFullDetails(animeId) {
+    const detailsQuery = `
+        query ($id: Int) {
+            Media (id: $id) {
+                id
+                title { romaji english native }
+                coverImage { large }
+                genres
+                status
+                episodes
+                seasonYear
+                season
+                averageScore
+                format
+            }
+        }
+    `;
     try {
-        const json = await jikanFetch(`/anime/${animeId}/full`);
-        return json.data || null;
+        const data = await anilistQuery(detailsQuery, { id: animeId });
+        const item = data.Media;
+        return {
+            id:       item.id,
+            title:    item.title.romaji || item.title.english || item.title.native,
+            titles:   [
+                { type: 'Romaji', title: item.title.romaji },
+                { type: 'English', title: item.title.english },
+                { type: 'Native', title: item.title.native }
+            ].filter(t => t.title),
+            image:    item.coverImage?.large || '',
+            genres:   (item.genres || []).map(g => ({ name: g })),
+            themes:   [],
+            status:   item.status,
+            episodes: item.episodes,
+            year:     item.seasonYear,
+            season:   item.season,
+            score:    item.averageScore ? (item.averageScore / 10).toFixed(1) : null,
+            type:     item.format
+        };
     } catch (e) {
         console.warn('Не удалось загрузить детали:', e);
         return null;
@@ -256,25 +303,21 @@ async function handleSearch() {
             return;
         }
 
-        // Показываем пользователю список найденных вариантов, чтобы он выбрал нужный
         const chosen = await showVersionPicker(results, 'Найдено несколько вариантов. Выберите нужный:');
         if (!chosen) return;
 
-        // Проверяем, есть ли у выбранного аниме связанные версии
         const relations = await fetchRelations(chosen.id);
         let finalAnime = chosen;
 
         if (relations.length > 0) {
-            // Спрашиваем, какую версию пользователь смотрел
             const selectedRelation = await showVersionPicker(
                 relations,
                 'У этого аниме есть связанные версии. Какую вы смотрели?'
             );
             if (selectedRelation) {
-                // Подгружаем полные данные выбранной версии
                 const fullDetails = await fetchFullDetails(selectedRelation.id);
                 if (fullDetails) {
-                    finalAnime = mapFullToAnime(fullDetails);
+                    finalAnime = { ...fullDetails, addedAt: Date.now() };
                 } else {
                     finalAnime = {
                         ...chosen,
@@ -285,16 +328,15 @@ async function handleSearch() {
             }
         }
 
-        // Проверяем дубликат
         if (library.some(a => a.id === finalAnime.id)) {
             statusMessage.textContent = 'Это аниме уже есть в библиотеке.';
             return;
         }
 
-        // Подтягиваем рейтинг Shikimori
-        statusMessage.textContent = 'Загружаем рейтинг Shikimori...';
-        const shikiScore = await fetchShikimoriScore(finalAnime.title);
-        finalAnime.shikimoriScore = shikiScore;
+        // Опционально: Shikimori
+        // statusMessage.textContent = 'Загружаем рейтинг Shikimori...';
+        // const shikiScore = await fetchShikimoriScore(finalAnime.title);
+        // finalAnime.shikimoriScore = shikiScore;
 
         library.push(finalAnime);
         saveLibrary();
@@ -310,24 +352,6 @@ async function handleSearch() {
         searchBtn.disabled = false;
         searchBtn.textContent = 'Найти';
     }
-}
-
-function mapFullToAnime(item) {
-    return {
-        id:       item.mal_id,
-        title:    item.title,
-        titles:   item.titles || [],
-        image:    item.images?.jpg?.image_url || item.images?.webp?.image_url || '',
-        genres:   item.genres || [],
-        themes:   item.themes || [],
-        status:   item.status || '',
-        episodes: item.episodes || null,
-        year:     item.year || null,
-        season:   item.season || null,
-        score:    item.score || null,
-        type:     item.type || null,
-        addedAt:  Date.now()
-    };
 }
 
 // ============================================================
