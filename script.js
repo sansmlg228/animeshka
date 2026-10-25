@@ -129,12 +129,39 @@ function saveLibrary() {
 }
 
 // ============================================================
-//  JIKAN API
+//  JIKAN API (через CORS-прокси)
 // ============================================================
-async function jikanFetch(path) {
-    const res = await fetch(`${JIKAN_BASE}${path}`);
-    if (!res.ok) throw new Error(`Jikan API: ${res.status}`);
-    return res.json();
+async function jikanFetch(path, retries = 3, delay = 1000) {
+    // Используем публичный прокси, чтобы обойти блокировку и CORS
+    const proxy = 'https://corsproxy.io/?';
+    const targetUrl = `https://api.jikan.moe/v4${path}`;
+    const url = proxy + encodeURIComponent(targetUrl);
+
+    for (let i = 0; i < retries; i++) {
+        try {
+            const res = await fetch(url);
+            if (!res.ok) {
+                // Если ошибка сервера (5xx) или прокси (429), пробуем еще раз
+                if (res.status >= 500 || res.status === 429) {
+                    throw new Error(`Прокси вернул ошибку: ${res.status}`);
+                }
+                // Если ошибка клиента (4xx), повторять нет смысла
+                if (res.status >= 400 && res.status < 500) {
+                    throw new Error(`Ошибка запроса: ${res.status}`);
+                }
+            }
+            return res.json();
+        } catch (e) {
+            console.warn(`Попытка ${i + 1} из ${retries} не удалась:`, e.message);
+            if (i < retries - 1) {
+                // Ждем перед следующей попыткой (экспоненциальная задержка)
+                await new Promise(r => setTimeout(r, delay * (i + 1)));
+            } else {
+                // Если все попытки исчерпаны, выбрасываем ошибку
+                throw e;
+            }
+        }
+    }
 }
 
 async function fetchAnime(query) {
