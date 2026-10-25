@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🎌 Аниме Библиотека</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <header>
+        <h1>🎌 Аниме Библиотека</h1>
+
+        <div class="search-box">
+            <input type="text" id="search-input" placeholder="Название на русском, английском или ромадзи..." autocomplete="off">
+            <button id="search-btn">Найти</button>
+        </div>
+
+        <div class="toolbar">
+            <input type="text" id="library-search" placeholder="🔍 Поиск по библиотеке..." autocomplete="off">
+
+            <select id="genre-filter">
+                <option value="all">Все жанры</option>
+            </select>
+
+            <select id="sort-select">
+                <option value="title-asc">Название А→Я</option>
+                <option value="title-desc">Название Я→А</option>
+                <option value="status">По статусу</option>
+                <option value="added-desc">Сначала новые</option>
+                <option value="added-asc">Сначала старые</option>
+            </select>
+
+            <div class="io-buttons">
+                <button id="export-btn" class="ghost" title="Скачать библиотеку в JSON">⬇ Экспорт</button>
+                <label for="import-input" class="ghost" title="Загрузить библиотеку из JSON">⬆ Импорт</label>
+                <input type="file" id="import-input" accept=".json" hidden>
+            </div>
+        </div>
+
+        <div id="stats" class="stats"></div>
+    </header>
+
+    <main>
+        <div id="status-message"></div>
+        <div id="anime-grid" class="anime-grid"></div>
+    </main>
+
+    <!-- Модальное окно выбора версии -->
+    <div id="version-modal" class="modal-backdrop hidden">
+        <div class="modal">
+            <h2>Выберите версию</h2>
+            <p class="modal-subtitle">Найдено несколько связанных тайтлов. Какую версию вы смотрели?</p>
+            <div id="version-options" class="version-options"></div>
+            <button id="version-cancel" class="ghost">Отмена</button>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
